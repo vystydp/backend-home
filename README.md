@@ -34,8 +34,3 @@ SELECT count(*) FILTER (WHERE gap_s IS NOT NULL AND gap_s <> 5) AS bad_gaps
 FROM (SELECT extract(epoch FROM time - lag(time) OVER (ORDER BY time)) AS gap_s
       FROM car_state WHERE car_id = 1) t;
 ```
-
-## Design
-
-See [`docs/PROBLEM_ANALYSIS.md`](docs/PROBLEM_ANALYSIS.md) and [`docs/DESIGN.md`](docs/DESIGN.md)
-for the problem breakdown, the resampling algorithm, the reliability model, and the tradeoffs.
