@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EV Telemetry Pipeline</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0f1117;
+    color: #e2e8f0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px;
+    gap: 48px;
+  }
+
+  h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #94a3b8;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  /* ── PIPELINE ROW ── */
+  .pipeline {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    width: 100%;
+    max-width: 1100px;
+    position: relative;
+  }
+
+  /* ── NODES ── */
+  .node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .box {
+    border-radius: 12px;
+    border: 1.5px solid;
+    padding: 14px 18px;
+    text-align: center;
+    position: relative;
+    min-width: 110px;
+  }
+
+  .box .label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .box .sublabel {
+    font-size: 0.68rem;
+    opacity: 0.6;
+    line-height: 1.4;
+  }
+
+  /* colour themes */
+  .ev    { border-color: #4ade80; background: #052e16; }
+  .ev .label { color: #4ade80; }
+  .ev .icon { font-size: 2rem; }
+
+  .mqtt  { border-color: #60a5fa; background: #0c1a2e; }
+  .mqtt .label { color: #60a5fa; }
+
+  .collector { border-color: #f59e0b; background: #1c1003; }
+  .collector .label { color: #f59e0b; }
+
+  .rabbit { border-color: #f97316; background: #1c0a00; }
+  .rabbit .label { color: #f97316; }
+
+  .writer { border-color: #a78bfa; background: #120d24; }
+  .writer .label { color: #a78bfa; }
+
+  .postgres { border-color: #34d399; background: #042f2e; }
+  .postgres .label { color: #34d399; }
+
+  /* ── ARROW TRACKS ── */
+  .track {
+    flex: 1;
+    height: 32px;
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .track-line {
+    width: 100%;
+    height: 2px;
+    background: #1e293b;
+    border-radius: 1px;
+    position: relative;
+    overflow: visible;
+  }
+
+  /* arrowhead */
+  .track-line::after {
+    content: '';
+    position: absolute;
+    right: -1px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 6px solid transparent;
+    border-left: 8px solid #1e293b;
+  }
+
+  /* ── FLYING PACKETS ── */
+  .packet {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    opacity: 0;
+  }
+
+  /* track 0: EV → Mosquitto (green, MQTT) */
+  .t0 .packet { background: #4ade80; box-shadow: 0 0 8px #4ade80; }
+  .t0 .packet:nth-child(1) { animation: fly 2.0s 0.0s infinite; }
+  .t0 .packet:nth-child(2) { animation: fly 2.0s 0.7s infinite; }
+  .t0 .packet:nth-child(3) { animation: fly 2.0s 1.4s infinite; }
+
+  /* track 1: Mosquitto → Collector (blue) */
+  .t1 .packet { background: #60a5fa; box-shadow: 0 0 8px #60a5fa; }
+  .t1 .packet:nth-child(1) { animation: fly 2.2s 0.2s infinite; }
+  .t1 .packet:nth-child(2) { animation: fly 2.2s 0.9s infinite; }
+  .t1 .packet:nth-child(3) { animation: fly 2.2s 1.6s infinite; }
+
+  /* track 2: Collector → RabbitMQ (amber, confirmed) */
+  .t2 .packet { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
+  .t2 .packet:nth-child(1) { animation: fly 2.4s 0.1s infinite; }
+  .t2 .packet:nth-child(2) { animation: fly 2.4s 1.0s infinite; }
+  .t2 .packet:nth-child(3) { animation: fly 2.4s 1.7s infinite; }
+
+  /* track 3: RabbitMQ → Writer (orange) */
+  .t3 .packet { background: #f97316; box-shadow: 0 0 8px #f97316; }
+  .t3 .packet:nth-child(1) { animation: fly 2.6s 0.4s infinite; }
+  .t3 .packet:nth-child(2) { animation: fly 2.6s 1.3s infinite; }
+
+  /* track 4: Writer → Postgres (purple → teal) */
+  .t4 .packet { background: #a78bfa; box-shadow: 0 0 8px #a78bfa; }
+  .t4 .packet:nth-child(1) { animation: fly 3.0s 0.8s infinite; }
+  .t4 .packet:nth-child(2) { animation: fly 3.0s 1.8s infinite; }
+
+  @keyframes fly {
+    0%   { left: 0%;   opacity: 0; }
+    5%   { opacity: 1; }
+    95%  { opacity: 1; }
+    100% { left: 100%; opacity: 0; }
+  }
+
+  /* ── TRACK LABELS ── */
+  .track-label {
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.6rem;
+    white-space: nowrap;
+    color: #475569;
+    letter-spacing: 0.03em;
+  }
+
+  /* ── DETAIL PANELS ── */
+  .details {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    width: 100%;
+    max-width: 1100px;
+  }
+
+  .detail-card {
+    border-radius: 10px;
+    border: 1px solid #1e293b;
+    background: #0d1220;
+    padding: 16px;
+  }
+
+  .detail-card h3 {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #1e293b;
+  }
+
+  .detail-card ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .detail-card li {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    line-height: 1.5;
+  }
+
+  .detail-card li span {
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+
+  .c-collector h3 { color: #f59e0b; }
+  .c-writer    h3 { color: #a78bfa; }
+  .c-postgres  h3 { color: #34d399; }
+
+  /* ── RESAMPLER ANIMATION ── */
+  .resampler-vis {
+    width: 100%;
+    max-width: 1100px;
+  }
+
+  .resampler-vis h2 {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #a78bfa;
+    margin-bottom: 12px;
+  }
+
+  .grid-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .grid-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .field-name {
+    width: 72px;
+    font-size: 0.68rem;
+    color: #64748b;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .buckets {
+    display: flex;
+    gap: 4px;
+  }
+
+  .bucket {
+    width: 52px;
+    height: 28px;
+    border-radius: 5px;
+    border: 1px solid #1e293b;
+    background: #0d1220;
+    font-size: 0.6rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+    position: relative;
+    transition: all 0.3s;
+  }
+
+  .bucket.has-data {
+    border-color: #a78bfa55;
+    background: #1a1040;
+    color: #c4b5fd;
+  }
+
+  .bucket.locf {
+    border-color: #60a5fa33;
+    background: #0c1530;
+    color: #93c5fd;
+  }
+
+  .bucket.stale {
+    border-color: #ef444433;
+    background: #1c0a0a;
+    color: #ef4444;
+  }
+
+  .bucket .tick-label {
+    font-size: 0.55rem;
+    color: #334155;
+    margin-bottom: 1px;
+  }
+
+  .bucket.writing {
+    animation: pulse-write 0.6s ease;
+  }
+
+  @keyframes pulse-write {
+    0%   { transform: scale(1);    border-color: #34d399; box-shadow: 0 0 0 0 #34d39966; }
+    50%  { transform: scale(1.08); border-color: #34d399; box-shadow: 0 0 8px 4px #34d39933; }
+    100% { transform: scale(1);    border-color: #a78bfa55; }
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    margin-top: 10px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.65rem;
+    color: #64748b;
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+  }
+
+  /* ── WATERMARK INDICATOR ── */
+  .watermark-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .wm-label {
+    width: 72px;
+    font-size: 0.6rem;
+    color: #f97316;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .wm-track {
+    display: flex;
+    gap: 4px;
+  }
+
+  .wm-cell {
+    width: 52px;
+    height: 6px;
+    border-radius: 2px;
+    background: #1e293b;
+  }
+
+  .wm-cell.settled { background: #22c55e44; }
+  .wm-cell.grace   { background: #f9731622; }
+  .wm-cell.future  { background: #1e293b; }
+
+  /* status bar */
+  .status {
+    font-size: 0.68rem;
+    color: #64748b;
+    text-align: center;
+    min-height: 1.2em;
+  }
+
+  .status .highlight { color: #a78bfa; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>EV Telemetry Pipeline — Live Architecture</h1>
+
+<!-- MAIN PIPELINE -->
+<div class="pipeline">
+
+  <!-- EV -->
+  <div class="node">
+    <div class="box ev">
+      <div class="icon">🚗</div>
+      <div class="label">EV</div>
+      <div class="sublabel">delta-helper<br>simulator</div>
+    </div>
+  </div>
+
+  <div class="track t0">
+    <div class="track-line">
+      <span class="track-label">MQTT QoS 1</span>
+      <div class="packet"></div>
+      <div class="packet"></div>
+      <div class="packet"></div>
+    </div>
+  </div>
+
+  <!-- Mosquitto -->
+  <div class="node">
+    <div class="box mqtt">
+      <div class="label">Mosquitto</div>
+      <div class="sublabel">MQTT broker<br>port 51883</div>
+    </div>
+  </div>
+
+  <div class="track t1">
+    <div class="track-line">
+      <span class="track-label">subscribe car/1/#</span>
+      <div class="packet"></div>
+      <div class="packet"></div>
+      <div class="packet"></div>
+    </div>
+  </div>
+
+  <!-- Collector -->
+  <div class="node">
+    <div class="box collector">
+      <div class="label">Collector</div>
+      <div class="sublabel">parse · transform<br>stateless</div>
+    </div>
+  </div>
+
+  <div class="track t2">
+    <div class="track-line">
+      <span class="track-label">publish confirms</span>
+      <div class="packet"></div>
+      <div class="packet"></div>
+      <div class="packet"></div>
+    </div>
+  </div>
+
+  <!-- RabbitMQ -->
+  <div class="node">
+    <div class="box rabbit">
+      <div class="label">RabbitMQ</div>
+      <div class="sublabel">durable queue<br>persistent msgs</div>
+    </div>
+  </div>
+
+  <div class="track t3">
+    <div class="track-line">
+      <span class="track-label">prefetch=1 · manual ack</span>
+      <div class="packet"></div>
+      <div class="packet"></div>
+    </div>
+  </div>
+
+  <!-- Writer -->
+  <div class="node">
+    <div class="box writer">
+      <div class="label">Writer</div>
+      <div class="sublabel">resample · SoC<br>stateful</div>
+    </div>
+  </div>
+
+  <div class="track t4">
+    <div class="track-line">
+      <span class="track-label">upsert ON CONFLICT</span>
+      <div class="packet"></div>
+      <div class="packet"></div>
+    </div>
+  </div>
+
+  <!-- Postgres -->
+  <div class="node">
+    <div class="box postgres">
+      <div class="label">Postgres</div>
+      <div class="sublabel">car_state<br>5s rows · no gaps</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- DETAIL CARDS -->
+<div class="details">
+  <div class="detail-card c-collector">
+    <h3>Collector — stateless transforms</h3>
+    <ul>
+      <li><span>parseTopic()</span> → structured metric</li>
+      <li><span>gear</span> "N"→0, "1"-"6"→1-6, else drop</li>
+      <li><span>speed</span> m/s × 3.6 → km/h</li>
+      <li><span>payload</span> bare value or JSON envelope</li>
+      <li><span>event time</span> from payload, fallback to receipt</li>
+      <li><span>unknown topics</span> dropped at the edge</li>
+    </ul>
+  </div>
+  <div class="detail-card c-writer">
+    <h3>Writer — Resampler internals</h3>
+    <ul>
+      <li><span>Series</span> sorted (ts, value) per field</li>
+      <li><span>LOCF</span> valueAsOf(t) → last known ≤ t</li>
+      <li><span>fresh()</span> null if older than 5 min</li>
+      <li><span>watermark</span> maxTs − graceMs (10 s)</li>
+      <li><span>SoC</span> Σ(socᵢ×capᵢ) / Σ(capᵢ)</li>
+      <li><span>final flush</span> drops grace on shutdown</li>
+    </ul>
+  </div>
+  <div class="detail-card c-postgres">
+    <h3>Postgres — guarantees</h3>
+    <ul>
+      <li><span>unique index</span> (car_id, time)</li>
+      <li><span>upsert</span> ON CONFLICT DO UPDATE</li>
+      <li><span>idempotent</span> replay = same result</li>
+      <li><span>gap-free</span> one row per 5 s always</li>
+      <li><span>NULL</span> = stale or never observed</li>
+      <li><span>timestamp</span> UTC, no timezone offset</li>
+    </ul>
+  </div>
+</div>
+
+<!-- RESAMPLER VISUALISATION -->
+<div class="resampler-vis">
+  <h2>Resampler — Live Bucketing (LOCF + Watermark)</h2>
+  <div class="grid-container" id="grid"></div>
+  <div class="watermark-row">
+    <div class="wm-label">watermark</div>
+    <div class="wm-track" id="wm-track"></div>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#a78bfa;border-radius:2px"></div>real observation</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1a1040;border:1px solid #60a5fa33;border-radius:2px"></div>LOCF carry-forward</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1c0a0a;border:1px solid #ef444433;border-radius:2px"></div>stale → NULL</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#22c55e44;border-radius:2px"></div>settled (written)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f9731622;border-radius:2px"></div>grace window</div>
+  </div>
+  <div class="status" id="status">&nbsp;</div>
+</div>
+
+<script>
+const FIELDS   = ['speed', 'gear', 'latitude', 'soc'];
+const BUCKETS  = 8;   // number of visible 5-second ticks
+const GRACE    = 2;   // grace = 2 bucket widths
+
+// Build grid DOM
+const grid = document.getElementById('grid');
+const cells = {}; // field → [td elements]
+
+FIELDS.forEach(f => {
+  const row = document.createElement('div');
+  row.className = 'grid-row';
+
+  const fn = document.createElement('div');
+  fn.className = 'field-name';
+  fn.textContent = f;
+  row.appendChild(fn);
+
+  const bk = document.createElement('div');
+  bk.className = 'buckets';
+  cells[f] = [];
+
+  for (let i = 0; i < BUCKETS; i++) {
+    const b = document.createElement('div');
+    b.className = 'bucket';
+    b.innerHTML = `<div class="tick-label">t=${i*5}s</div><div class="val">—</div>`;
+    cells[f].push(b);
+    bk.appendChild(b);
+  }
+  row.appendChild(bk);
+  grid.appendChild(row);
+});
+
+// Watermark track
+const wmTrack = document.getElementById('wm-track');
+const wmCells = [];
+for (let i = 0; i < BUCKETS; i++) {
+  const c = document.createElement('div');
+  c.className = 'wm-cell';
+  wmCells.push(c);
+  wmTrack.appendChild(c);
+}
+
+const status = document.getElementById('status');
+
+// ── Simulation state ──
+// Scenario: events arrive, watermark advances, buckets get written
+const scenarios = [
+  { label: 'Event arrives: speed=36 at t=1s → lands in bucket t=0s', events: [{f:'speed',bucket:0,val:'36',real:true}], watermark:-1 },
+  { label: 'Event arrives: gear=2 at t=2s → lands in bucket t=0s', events: [{f:'gear',bucket:0,val:'2',real:true}], watermark:-1 },
+  { label: 'Event arrives: latitude=50.1 at t=3s → lands in bucket t=0s', events: [{f:'latitude',bucket:0,val:'50.1',real:true}], watermark:-1 },
+  { label: 'Event arrives: soc=65 at t=4s → lands in bucket t=0s', events: [{f:'soc',bucket:0,val:'65%',real:true}], watermark:-1 },
+  { label: 'maxTs=4s — watermark=4−10=−6s → nothing settles yet (grace window)', events:[], watermark:-2 },
+  { label: 'Event arrives: speed=40 at t=7s → lands in bucket t=5s', events: [{f:'speed',bucket:1,val:'40',real:true}], watermark:-1 },
+  { label: 'maxTs=7s — watermark=7−10=−3s → still nothing settles', events:[], watermark:-2 },
+  { label: 'Event arrives: speed=44 at t=13s → lands in bucket t=10s', events: [{f:'speed',bucket:2,val:'44',real:true}], watermark:0 },
+  { label: 'watermark=t=3s → bucket t=0s settles! LOCF fills gear/lat/soc forward. Writing to Postgres…', events:[], watermark:0, write:[0] },
+  { label: 'Event arrives: soc=60 at t=16s → lands in bucket t=15s', events: [{f:'soc',bucket:3,val:'60%',real:true}], watermark:1 },
+  { label: 'watermark=t=6s → bucket t=5s settles! LOCF: gear/lat carry forward, speed=40. Writing…', events:[], watermark:1, write:[1] },
+  { label: 'No new events for 8s (quiet period)…', events:[], watermark:2 },
+  { label: 'Event arrives: speed=48 at t=25s → bucket t=25s. watermark=t=15s → buckets t=10,15 settle', events:[{f:'speed',bucket:5,val:'48',real:true}], watermark:3, write:[2,3] },
+  { label: 'Staleness: latitude last seen at t=0s (25s ago > maxStaleness=5min still ok) — LOCF fills', events:[], watermark:4, write:[4] },
+  { label: 'Graceful shutdown → final:true → grace window dropped → remaining buckets flushed', events:[], watermark:7, write:[5,6,7] },
+];
+
+// track current state of each cell
+const state = {};
+FIELDS.forEach(f => { state[f] = Array(BUCKETS).fill(null); });
+const written = Array(BUCKETS).fill(false);
+let lastReal = {}; // field → {bucket, val}
+FIELDS.forEach(f => { lastReal[f] = null; });
+
+function renderCells() {
+  FIELDS.forEach(f => {
+    for (let i = 0; i < BUCKETS; i++) {
+      const b = cells[f][i];
+      const valEl = b.querySelector('.val');
+      const s = state[f][i];
+      if (s === null) {
+        b.className = 'bucket';
+        valEl.textContent = '—';
+      } else if (s.null) {
+        b.className = 'bucket stale';
+        valEl.textContent = 'NULL';
+      } else if (s.real) {
+        b.className = 'bucket has-data' + (written[i] ? '' : '');
+        valEl.textContent = s.val;
+      } else {
+        b.className = 'bucket locf';
+        valEl.textContent = s.val + '↗';
+      }
+      if (written[i] && s !== null) {
+        b.style.opacity = '0.55';
+      } else {
+        b.style.opacity = '1';
+      }
+    }
+  });
+}
+
+function renderWatermark(wm) {
+  for (let i = 0; i < BUCKETS; i++) {
+    const c = wmCells[i];
+    if (i < wm) c.className = 'wm-cell settled';
+    else if (i < wm + GRACE) c.className = 'wm-cell grace';
+    else c.className = 'wm-cell future';
+  }
+}
+
+let stepIdx = 0;
+
+async function runStep() {
+  if (stepIdx >= scenarios.length) {
+    stepIdx = 0;
+    // reset
+    FIELDS.forEach(f => { state[f] = Array(BUCKETS).fill(null); lastReal[f] = null; });
+    written.fill(false);
+    renderCells();
+    renderWatermark(-1);
+    await delay(1500);
+    return;
+  }
+
+  const sc = scenarios[stepIdx++];
+  status.innerHTML = `<span class="highlight">Step ${stepIdx}/${scenarios.length}:</span> ${sc.label}`;
+
+  // apply events
+  sc.events.forEach(ev => {
+    state[ev.f][ev.bucket] = { val: ev.val, real: ev.real };
+    lastReal[ev.f] = { bucket: ev.bucket, val: ev.val };
+  });
+
+  // LOCF: fill from lastReal forward
+  FIELDS.forEach(f => {
+    if (lastReal[f] === null) return;
+    const { bucket: lb, val } = lastReal[f];
+    for (let i = lb + 1; i < BUCKETS; i++) {
+      if (state[f][i] === null) state[f][i] = { val, real: false };
+    }
+  });
+
+  renderCells();
+  renderWatermark(sc.watermark ?? -1);
+
+  // write animation
+  if (sc.write) {
+    await delay(400);
+    for (const b of sc.write) {
+      written[b] = true;
+      FIELDS.forEach(f => {
+        const el = cells[f][b];
+        el.classList.add('writing');
+        setTimeout(() => el.classList.remove('writing'), 700);
+      });
+      wmCells[b].className = 'wm-cell settled';
+      await delay(300);
+    }
+    renderCells();
+  }
+}
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function loop() {
+  while (true) {
+    await runStep();
+    await delay(stepIdx === 0 ? 2000 : 2200);
+  }
+}
+
+loop();
+</script>
+</body>
+</html>
